@@ -51,10 +51,27 @@ Die GUI baut lediglich den CLI-Befehl zusammen und startet ihn als Subprocess. D
 - So kann man pro Urlaub anpassen (z.B. Strandurlaub vs. Städtetrip vs. Wanderurlaub)
 
 ### 3. Duplikaterkennung
-- CLIP-Embeddings aller Fotos berechnen
-- Kosinus-Ähnlichkeit zwischen Bildern vergleichen
-- Ähnliche Bilder (Schwellenwert konfigurierbar, Standard 0.95) zu Gruppen zusammenfassen
-- Pro Gruppe nur das qualitativ beste Bild behalten
+Urlaubsfotos entstehen typischerweise in Serien — 5–10 fast identische Aufnahmen direkt hintereinander. Statt alle Bilder gegen alle zu vergleichen (O(n²)), werden Fotos **nach Aufnahmezeit sortiert** und dann **sequentiell n mit n+1 verglichen** (O(n)). Solange aufeinanderfolgende Fotos ähnlich sind, gehören sie zur selben Gruppe. Sobald sich das Bild ändert, beginnt eine neue Gruppe.
+
+**Algorithmus:**
+1. Fotos nach Aufnahmedatum sortieren (EXIF, Fallback: Datei-mtime)
+2. **Serien erkennen (O(n)):** Sequentiell durchlaufen — Foto[n] mit Foto[n+1] vergleichen. Ähnlich → selbe Serie. Nicht ähnlich → neue Serie beginnt.
+3. **Pro Serie:** Bestes Foto behalten, Repräsentant-Embedding/-Hash der Serie speichern (= Embedding/Hash des besten Fotos)
+4. **Serien-Quervergleich (O(s²), s = Anzahl Serien):** Repräsentanten aller Serien untereinander vergleichen, um doppelte Serien zu finden (z.B. gleiches Motiv morgens und abends fotografiert). Falls ähnlich → Serien zusammenführen, nur den besten Repräsentanten behalten.
+5. Da s << n (typisch: 500 Fotos → ~80 Serien) ist der Quervergleich vernachlässigbar schnell.
+
+**Ähnlichkeitsmetrik — zwei Strategien:**
+
+**Mit CLIP (Standard):**
+- CLIP-Embeddings aus der Foto-Bewertung wiederverwenden
+- Kosinus-Ähnlichkeit zwischen Nachbarn vergleichen
+- Schwellenwert konfigurierbar (Standard 0.95)
+
+**Ohne CLIP (Fallback via Perceptual Hashing):**
+- Perceptual Hash (pHash) pro Bild berechnen (`imagehash`-Bibliothek)
+- Hamming-Distanz zwischen Nachbarn vergleichen
+- Schwellenwert konfigurierbar (Hamming-Distanz ≤ Standard 8)
+- Vorteil: deutlich schneller als CLIP, funktioniert auch mit `--no-clip`
 
 ### 4. Video-Verarbeitung
 Zwei Modi, automatisch unterschieden anhand der Videolänge (Schwelle konfigurierbar, Standard 3 Min):
@@ -71,7 +88,7 @@ Zwei Modi, automatisch unterschieden anhand der Videolänge (Schwelle konfigurie
 - Die N besten Szenen als separate Kurzclips exportieren via FFmpeg (stream copy, kein Re-Encoding)
 
 **Gemeinsam:**
-- Unterstützte Formate: MP4, MOV, AVI, MKV, M4V, MTS
+- Unterstützte Formate: MP4, MOV, AVI, MKV, M4V, MTS (MTS/AVCHD experimentell — abhängig vom OpenCV-Build)
 
 ### 5. Auswahl und Export
 - Fotos nach Score sortieren, top X% behalten (konfigurierbar)
@@ -90,9 +107,12 @@ Reines Konfigurationsfenster für die CLI — keine eigene Verarbeitungslogik.
 - Schieberegler: "Max. Highlight-Clips pro langem Video" (1–5, Standard 2)
 - Schieberegler: "Kurzclip-Schwelle in Sekunden" (60–600, Standard 180)
 - Schieberegler: "Duplikat-Schwellenwert" (0.80–1.00, Standard 0.95)
+- Schieberegler: "Gewicht technischer Score" (0.0–1.0, Standard 0.4)
 - Checkbox: CLIP-Modell verwenden (ja/nein)
 - Checkbox: Duplikat-Check (ja/nein)
 - Checkbox: Videos verarbeiten (ja/nein)
+- Checkbox: Rekursiv scannen (ja/nein, Standard ja)
+- Checkbox: Dry-Run — nur bewerten, nicht kopieren (ja/nein)
 - **Textfelder für CLIP-Prompts:**
   - Positive Prompts (mehrzeilig, ein Prompt pro Zeile)
   - Negative Prompts (mehrzeilig, ein Prompt pro Zeile)
@@ -121,6 +141,9 @@ Optionen:
   --dedup-threshold F         Ähnlichkeitsschwelle für Duplikate (Standard: 0.95)
   --positive-prompts P        Komma-getrennte positive CLIP-Prompts
   --negative-prompts P        Komma-getrennte negative CLIP-Prompts
+  --tech-weight F             Gewicht des technischen Scores (0.0–1.0, Standard: 0.4, Rest = CLIP)
+  --no-recursive              Eingabeordner nicht rekursiv durchsuchen
+  --dry-run                   Nur bewerten und Report erstellen, keine Dateien kopieren
   --verbose                   Detaillierte Score-Ausgabe pro Datei
   --json-report PATH          JSON-Bericht speichern (Standard: <output>/report.json)
 ```
@@ -128,16 +151,17 @@ Optionen:
 ---
 
 ## Technischer Stack
-- Python 3.11+
+- Python 3.11+ (verwaltet via `uv`)
+- `uv` für Projektmanagement, Dependencies und Virtualenv
 - `open-clip-torch` für CLIP-Embeddings
 - `opencv-python` für Bildqualitätsbewertung und Videoframes
 - `scenedetect[opencv]` für Videoszenenerkennung
 - `Pillow` + `pillow-heif` für Bildverarbeitung inkl. HEIC-Support
+- `imagehash` für Perceptual Hashing (Duplikaterkennung ohne CLIP)
 - `exifread` für EXIF-Metadaten
 - `tqdm` für Fortschrittsanzeige (CLI)
 - `ffmpeg` (externe Abhängigkeit) für Video-Clip-Export (stream copy)
-- `tkinter` für die GUI
-- `torch` / `torchvision` für CLIP
+- `customtkinter` für die GUI (moderner Look, basiert auf tkinter)
 
 ---
 
@@ -145,6 +169,7 @@ Optionen:
 ```
 imgPick/
 ├── PLAN.md
+├── pyproject.toml       # uv-Projektdefinition + Dependencies
 ├── main.py              # CLI-Einstiegspunkt (argparse)
 ├── gui.py               # Tkinter-Oberfläche, ruft main.py als Subprocess auf
 ├── scorer.py            # Foto-Bewertungslogik (technisch + CLIP)
@@ -152,7 +177,6 @@ imgPick/
 ├── video_processor.py   # Szenenerkennung + Clip-Export
 ├── exif_reader.py       # Metadaten-Extraktion
 ├── exporter.py          # Datei-Kopieren, Sortierung und Berichterstellung
-├── requirements.txt     # Alle Python-Abhängigkeiten
 └── README.md            # Installationsanleitung
 ```
 
@@ -165,7 +189,9 @@ imgPick/
 - Keine Originaldateien verändern oder löschen – nur kopieren
 - CLIP-Modell beim ersten Start automatisch herunterladen (~350 MB), danach gecacht
 - Verarbeitung von 500 Fotos sollte unter 5 Minuten laufen (auf normaler CPU)
-- CLI gibt Fortschritt auf stdout aus (maschinenlesbar genug für GUI-Parsing)
+- CLIP-Inference in Batches (z.B. 32 Bilder gleichzeitig) für bessere Performance
+- Duplikat-Vergleich in O(n) — Fotos nach Zeit sortiert, sequentieller Nachbar-Vergleich
+- CLI gibt Fortschritt auf stdout in maschinenlesbarem Format aus (siehe Fortschrittsprotokoll)
 
 ### Windows-Kompatibilität
 Während der Implementierung muss durchgehend auf Windows-Kompatibilität geachtet werden:
@@ -175,16 +201,32 @@ Während der Implementierung muss durchgehend auf Windows-Kompatibilität geacht
 - **Subprocess-Aufrufe**: Kein `shell=True` wenn vermeidbar, und bei `shell=True` beachten dass Windows `cmd.exe` statt `sh` nutzt
 - **Encoding**: Dateinamen können auf Windows nicht-UTF-8 sein — bei Dateioperationen auf Encoding achten
 
+### Fortschrittsprotokoll (stdout)
+Die CLI gibt Fortschritt in einem strukturierten Format aus, das die GUI parsen kann:
+```
+STATUS:scan:Gefunden: 500 Fotos, 15 Kurzclips, 3 lange Videos
+STATUS:model:CLIP-Modell geladen (ViT-B-32)
+PROGRESS:photos:<current>:<total>:<filename>
+PROGRESS:dedup:<current>:<total>
+PROGRESS:clips:<current>:<total>:<filename>
+PROGRESS:videos:<current>:<total>:<filename>
+PROGRESS:export:<current>:<total>:<filename>
+STATUS:done:Fertig!
+ERROR:<message>
+WARN:<message>
+```
+Alle anderen Zeilen (z.B. bei `--verbose`) werden als Info-Log angezeigt, aber nicht geparst.
+
 ---
 
 ## Implementierungsreihenfolge
 
 ### Phase 1: CLI-Backend
-1. Virtualenv + Dependencies installieren
+1. `uv init` + Dependencies in `pyproject.toml` definieren
 2. `exif_reader.py` — EXIF-Daten (Datum, GPS) aus Fotos lesen
 3. `scorer.py` — Technische Bewertung (Schärfe, Helligkeit, Kontrast)
 4. `scorer.py` — CLIP-Integration mit konfigurierbaren Prompts
-5. `deduplicator.py` — Duplikaterkennung via CLIP-Embeddings + Kosinus-Ähnlichkeit
+5. `deduplicator.py` — Duplikaterkennung via CLIP-Embeddings oder pHash-Fallback
 6. `video_processor.py` — Szenenerkennung + Clip-Export
 7. `exporter.py` — Dateien kopieren, chronologisch sortieren, JSON-Bericht
 8. `main.py` — CLI zusammenbauen (argparse), alles verdrahten
@@ -229,28 +271,37 @@ Für jedes Foto (mit Fortschrittsbalken `[142/500] beach_001.jpg`):
 1. **Bild laden** (Pillow, inkl. HEIC via pillow-heif)
 2. **EXIF-Daten lesen**: Aufnahmedatum, GPS-Koordinaten (wenn vorhanden)
 3. **Technischer Score berechnen** (jeweils 0.0–1.0, dann gewichtet):
-   - Schärfe: Laplacian-Varianz auf Graustufenbild → höher = schärfer
-   - Helligkeit: Mittlerer Pixelwert → Abzug wenn zu dunkel (<50) oder zu hell (>220)
-   - Kontrast: Standardabweichung der Luminanz → höher = besser
-   - Auflösung: Megapixel → kleiner Bonus für hohe Auflösung
+   - Schärfe: Laplacian-Varianz auf Graustufenbild → Normalisierung: `min(1.0, variance / 500)` (empirischer Maximalwert, typische Werte 10–1000)
+   - Helligkeit: Mittlerer Pixelwert (0–255) → Score = 1.0 im Idealbereich (80–180), linearer Abzug wenn zu dunkel (<80) oder zu hell (>180), Minimum 0.0
+   - Kontrast: Standardabweichung der Luminanz → Normalisierung: `min(1.0, std / 80)` (empirischer Maximalwert)
+   - Auflösung: Megapixel → `min(1.0, megapixels / 12)` (12 MP als Referenzwert)
 4. **CLIP-Score berechnen** (falls aktiviert):
    - Bild-Embedding mit CLIP berechnen
    - Kosinus-Ähnlichkeit zu jedem positiven Prompt → Durchschnitt = Positiv-Score
    - Kosinus-Ähnlichkeit zu jedem negativen Prompt → Durchschnitt = Negativ-Score
-   - CLIP-Score = Positiv-Score − Negativ-Score (normalisiert auf 0.0–1.0)
+   - CLIP-Score = Positiv-Score − Negativ-Score, normalisiert via Clamp auf [0, 1]: `max(0, min(1, (raw_score + 1) / 2))`
 5. **Gesamt-Score**: Gewichteter Durchschnitt aus technischem Score und CLIP-Score
+   - Standard-Gewichte: 40% technisch, 60% CLIP (konfigurierbar via `--tech-weight`)
+   - Falls `--no-clip`: 100% technischer Score
 6. **CLIP-Embedding speichern** (wird in Schritt 5 für Duplikaterkennung wiederverwendet)
 
 Ergebnis: Liste aller Fotos mit Score, Datum und Embedding.
 
 ### Schritt 5: Foto-Duplikate erkennen (falls aktiviert)
-- Voraussetzung: CLIP muss aktiviert sein. Falls `--no-clip` und Dedup aktiv → Fehlermeldung: "Duplikaterkennung benötigt CLIP. Bitte --no-dedup setzen oder CLIP aktivieren."
-1. CLIP-Embeddings aller Fotos aus Schritt 4 nehmen
-2. Paarweise Kosinus-Ähnlichkeit berechnen
-3. Paare mit Ähnlichkeit >= Schwellenwert (z.B. 0.95) finden
-4. Zusammenhängende Gruppen bilden (A ähnlich B, B ähnlich C → Gruppe {A, B, C})
-5. Pro Gruppe: nur das Foto mit dem höchsten Gesamt-Score behalten, Rest markieren als "Duplikat"
-6. Ausgabe: `Duplikate: 45 Fotos in 18 Gruppen erkannt, 27 entfernt`
+- Falls CLIP aktiv: CLIP-Embeddings aus Schritt 4 verwenden (Kosinus-Ähnlichkeit)
+- Falls `--no-clip`: Fallback auf Perceptual Hashing (pHash, Hamming-Distanz)
+
+**Phase A — Serien erkennen (O(n)):**
+1. Fotos nach Aufnahmedatum sortieren (EXIF aus Schritt 4, Fallback: Datei-mtime)
+2. Sequentiell durchlaufen: Foto[n] mit Foto[n+1] vergleichen
+3. Ähnlichkeit >= Schwellenwert → selbe Serie, sonst neue Serie beginnen
+4. Pro Serie: nur das Foto mit dem höchsten Gesamt-Score behalten, Embedding/Hash als Serien-Repräsentant speichern
+5. Ausgabe: `Serien: 80 Serien erkannt aus 500 Fotos`
+
+**Phase B — Doppelte Serien finden (O(s²), s = Anzahl Serien):**
+6. Repräsentanten aller Serien paarweise vergleichen (gleicher Schwellenwert)
+7. Falls Serien-Repräsentanten ähnlich → Serien zusammenführen, nur den besten behalten
+8. Ausgabe: `Duplikate: 45 Fotos in 18 Gruppen erkannt, 27 entfernt (davon 3 doppelte Serien zusammengeführt)`
 
 ### Schritt 6: Foto-Auswahl
 1. Duplikate aus der Liste entfernen
@@ -288,22 +339,25 @@ Für jedes lange Video (>= Schwelle):
    - Schärfe + Helligkeit bewerten
    - Optional: CLIP-Score auf dem Frame
 3. **Beste N Szenen auswählen** (z.B. Top 2 pro Video)
-4. **Clips exportieren** via FFmpeg:
-   - `ffmpeg -ss <start> -to <end> -c copy -i <input> <output>`
-   - Stream copy = schnell, kein Qualitätsverlust
-5. Ausgabe: `Video "bootstrip.mp4" (28:15): 2 Highlight-Clips erstellt (02:30–03:15, 14:00–14:45)`
+4. Szenen mit Start-/End-Timecodes und Score merken (noch nicht exportieren)
+5. Ausgabe: `Video "bootstrip.mp4" (28:15): 2 Highlight-Szenen ausgewählt (02:30–03:15, 14:00–14:45)`
 
 ### Schritt 9: Export
+Falls `--dry-run` aktiv: diesen Schritt überspringen, nur den Report erstellen (Schritt 10).
+
 1. **Ausgabeordner erstellen** (falls nicht vorhanden)
 2. **Fotos kopieren**:
    - Ausgewählte Fotos in den Ausgabeordner kopieren
    - Dateinamen chronologisch nach Aufnahmedatum sortiert (Prefix: `001_`, `002_`, ...)
-   - Falls kein EXIF-Datum vorhanden → Warnung ausgeben: `⚠ Kein Aufnahmedatum für beach_001.jpg — Datei wird ans Ende sortiert`
+   - Falls kein EXIF-Datum vorhanden → Fallback auf Datei-Änderungsdatum (`os.path.getmtime`)
+   - Falls auch das nicht sinnvoll → Warnung: `⚠ Kein Aufnahmedatum für beach_001.jpg — Datei wird ans Ende sortiert`
 3. **Kurzclips kopieren**:
    - Ausgewählte Kurzclips in Unterordner `videos/` kopieren
    - Ebenfalls chronologisch sortiert
-4. **Highlight-Clips**:
-   - Bereits in Schritt 8 via FFmpeg in `videos/` exportiert
+4. **Highlight-Clips exportieren** via FFmpeg:
+   - `ffmpeg -ss <start> -to <end> -i <input> -c copy <output>`
+   - Stream copy = schnell, kein Qualitätsverlust
+   - Zielordner: `videos/`
 
 ### Schritt 10: Bericht erstellen
 1. **JSON-Bericht** schreiben (`report.json`):
