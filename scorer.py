@@ -130,29 +130,90 @@ class ClipModel:
         image_features /= image_features.norm(dim=-1, keepdim=True)
         return image_features.cpu().numpy().squeeze()
 
+    @torch.no_grad()
+    def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
+        """Encode multiple PIL images into normalized embeddings.
+
+        Returns array of shape (N, 512).
+        """
+        tensors = torch.stack([self.preprocess(img) for img in images]).to(self.device)
+        features = self.model.encode_image(tensors)
+        features /= features.norm(dim=-1, keepdim=True)
+        return features.cpu().numpy()
+
+    def prepare_prompts(
+        self,
+        positive_prompts: list[str],
+        negative_prompts: list[str],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pre-encode text prompts. Call once, reuse across images."""
+        return self.encode_text(positive_prompts), self.encode_text(negative_prompts)
+
+
+def _compute_clip_score(
+    embedding: np.ndarray,
+    pos_features: torch.Tensor,
+    neg_features: torch.Tensor,
+    device: str,
+) -> float:
+    """Compute CLIP score from a single embedding and pre-encoded prompts."""
+    emb_tensor = torch.from_numpy(embedding).unsqueeze(0).to(device)
+    pos_sim = (emb_tensor @ pos_features.T).mean().item()
+    neg_sim = (emb_tensor @ neg_features.T).mean().item()
+    raw_score = pos_sim - neg_sim
+    return max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
+
 
 def score_clip(
     path: Path,
     clip_model: ClipModel,
-    positive_prompts: list[str],
-    negative_prompts: list[str],
+    pos_features: torch.Tensor,
+    neg_features: torch.Tensor,
 ) -> ClipResult:
-    """Score a photo using CLIP similarity to text prompts.
+    """Score a single photo using pre-encoded CLIP prompts.
 
-    Returns ClipResult with score (0.0–1.0) and the image embedding.
+    Use clip_model.prepare_prompts() to get pos_features/neg_features.
     """
     img = Image.open(path).convert("RGB")
     embedding = clip_model.encode_image(img)
-
-    pos_features = clip_model.encode_text(positive_prompts)
-    neg_features = clip_model.encode_text(negative_prompts)
-
-    emb_tensor = torch.from_numpy(embedding).unsqueeze(0).to(clip_model.device)
-
-    pos_sim = (emb_tensor @ pos_features.T).mean().item()
-    neg_sim = (emb_tensor @ neg_features.T).mean().item()
-
-    raw_score = pos_sim - neg_sim
-    score = max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
-
+    score = _compute_clip_score(embedding, pos_features, neg_features, clip_model.device)
     return ClipResult(score=score, embedding=embedding)
+
+
+def score_clip_batch(
+    paths: list[Path],
+    clip_model: ClipModel,
+    pos_features: torch.Tensor,
+    neg_features: torch.Tensor,
+    batch_size: int = 32,
+) -> list[Optional[ClipResult]]:
+    """Score multiple photos in batches for better performance.
+
+    Returns a list of ClipResult (or None for files that failed to load).
+    """
+    results: list[Optional[ClipResult]] = [None] * len(paths)
+
+    for batch_start in range(0, len(paths), batch_size):
+        batch_paths = paths[batch_start:batch_start + batch_size]
+        images = []
+        valid_indices = []
+
+        for i, path in enumerate(batch_paths):
+            try:
+                img = Image.open(path).convert("RGB")
+                images.append(img)
+                valid_indices.append(batch_start + i)
+            except Exception:
+                pass
+
+        if not images:
+            continue
+
+        embeddings = clip_model.encode_images_batch(images)
+
+        for j, idx in enumerate(valid_indices):
+            embedding = embeddings[j]
+            score = _compute_clip_score(embedding, pos_features, neg_features, clip_model.device)
+            results[idx] = ClipResult(score=score, embedding=embedding)
+
+    return results
