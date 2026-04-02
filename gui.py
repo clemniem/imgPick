@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """imgPick GUI — Konfigurationsfenster für die CLI."""
 
+import subprocess
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
@@ -99,11 +101,34 @@ class ImgPickApp(ctk.CTk):
         self.negative_prompts_text.pack(fill="x", pady=(0, 5))
         self.negative_prompts_text.insert("1.0", "\n".join(DEFAULT_NEGATIVE_PROMPTS))
 
+        # --- Progress & Log (below scrollable frame) ---
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.pack(fill="both", expand=False, padx=10, pady=(0, 5))
+
+        self.progress_label = ctk.CTkLabel(bottom_frame, text="Bereit")
+        self.progress_label.pack(anchor="w")
+
+        self.progress_bar = ctk.CTkProgressBar(bottom_frame)
+        self.progress_bar.pack(fill="x", pady=(2, 5))
+        self.progress_bar.set(0)
+
+        self.log_text = ctk.CTkTextbox(bottom_frame, height=150, state="disabled")
+        self.log_text.pack(fill="both", expand=True, pady=(0, 5))
+
         # --- Start button ---
         self.start_button = ctk.CTkButton(
-            self, text="Start", command=self._on_start, height=40, font=ctk.CTkFont(size=16)
+            bottom_frame, text="Start", command=self._on_start, height=40, font=ctk.CTkFont(size=16)
         )
-        self.start_button.pack(fill="x", padx=10, pady=(5, 10))
+        self.start_button.pack(fill="x", pady=(0, 5))
+
+        # --- Open folder button (hidden initially) ---
+        self.open_folder_button = ctk.CTkButton(
+            bottom_frame, text="Ausgabeordner öffnen", command=self._open_output_folder,
+            height=35, state="disabled",
+        )
+        self.open_folder_button.pack(fill="x")
+
+        self._process = None
 
     def _add_section_label(self, text: str):
         ctk.CTkLabel(
@@ -186,7 +211,7 @@ class ImgPickApp(ctk.CTk):
         return args
 
     def _on_start(self):
-        """Validate and start processing. Wired in Story 8.2."""
+        """Validate inputs and launch CLI as subprocess."""
         if not self.input_var.get():
             self._show_error("Bitte Eingabeordner wählen")
             return
@@ -197,9 +222,98 @@ class ImgPickApp(ctk.CTk):
             self._show_error("Eingabeordner existiert nicht")
             return
 
-        # Placeholder — subprocess launch in Story 8.2
-        args = self._build_cli_args()
-        print(f"Would run: python main.py {' '.join(args)}")
+        # Disable start, clear log
+        self.start_button.configure(state="disabled")
+        self.open_folder_button.configure(state="disabled")
+        self.progress_bar.set(0)
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+        self.progress_label.configure(text="Starte...")
+
+        # Build command
+        cli_args = self._build_cli_args()
+        cmd = [sys.executable, str(Path(__file__).parent / "main.py")] + cli_args
+
+        # Launch in background thread
+        thread = threading.Thread(target=self._run_subprocess, args=(cmd,), daemon=True)
+        thread.start()
+
+    def _run_subprocess(self, cmd: list[str]):
+        """Run CLI subprocess and parse stdout line by line."""
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+            for line in self._process.stdout:
+                line = line.rstrip("\n")
+                self.after(0, self._handle_line, line)
+
+            self._process.wait()
+            self.after(0, self._on_done, self._process.returncode)
+
+        except Exception as e:
+            self.after(0, self._log, f"ERROR: {e}")
+            self.after(0, self._on_done, 1)
+
+    def _handle_line(self, line: str):
+        """Parse a single stdout line and update UI."""
+        if line.startswith("PROGRESS:"):
+            parts = line.split(":")
+            if len(parts) >= 4:
+                try:
+                    current = int(parts[2])
+                    total = int(parts[3])
+                    if total > 0:
+                        self.progress_bar.set(current / total)
+                    filename = parts[4] if len(parts) > 4 else ""
+                    self.progress_label.configure(text=f"{parts[1]}: {current}/{total} {filename}")
+                except ValueError:
+                    pass
+        elif line.startswith("STATUS:"):
+            parts = line.split(":", 2)
+            if len(parts) >= 3:
+                self.progress_label.configure(text=parts[2])
+                self._log(parts[2])
+        elif line.startswith("WARN:"):
+            self._log(f"⚠ {line[5:]}")
+        elif line.startswith("ERROR:"):
+            self._log(f"✗ {line[6:]}")
+        else:
+            self._log(line)
+
+    def _log(self, text: str):
+        """Append text to the log textbox."""
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", text + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _on_done(self, return_code: int):
+        """Called when subprocess finishes."""
+        self._process = None
+        self.start_button.configure(state="normal")
+
+        if return_code == 0:
+            self.progress_bar.set(1.0)
+            self.progress_label.configure(text="Fertig!")
+            if not self.dry_run_var.get():
+                self.open_folder_button.configure(state="normal")
+        else:
+            self.progress_label.configure(text="Fehler aufgetreten")
+            self._log(f"Prozess beendet mit Code {return_code}")
+
+    def _open_output_folder(self):
+        """Open output folder in system file browser."""
+        from utils import open_folder
+        path = Path(self.output_var.get())
+        if path.is_dir():
+            open_folder(path)
 
     def _show_error(self, msg: str):
         dialog = ctk.CTkToplevel(self)
