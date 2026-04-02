@@ -241,6 +241,9 @@ class ImgPickApp(ctk.CTk):
 
     def _run_subprocess(self, cmd: list[str]):
         """Run CLI subprocess and parse stdout line by line."""
+        self._summary_lines = []
+        self._collecting_summary = False
+
         try:
             self._process = subprocess.Popen(
                 cmd,
@@ -252,6 +255,11 @@ class ImgPickApp(ctk.CTk):
 
             for line in self._process.stdout:
                 line = line.rstrip("\n")
+                # Collect summary lines after STATUS:done
+                if self._collecting_summary and line.startswith("  "):
+                    self._summary_lines.append(line.strip())
+                if "STATUS:done:" in line:
+                    self._collecting_summary = True
                 self.after(0, self._handle_line, line)
 
             self._process.wait()
@@ -304,9 +312,38 @@ class ImgPickApp(ctk.CTk):
             self.progress_label.configure(text="Fertig!")
             if not self.dry_run_var.get():
                 self.open_folder_button.configure(state="normal")
+            # Show summary dialog
+            if self._summary_lines:
+                self._show_summary(self._summary_lines)
         else:
             self.progress_label.configure(text="Fehler aufgetreten")
             self._log(f"Prozess beendet mit Code {return_code}")
+
+    def _show_summary(self, lines: list[str]):
+        """Show a summary dialog after successful processing."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Zusammenfassung")
+        dialog.geometry("400x250")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog, text="Verarbeitung abgeschlossen!",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(pady=(15, 10))
+
+        for line in lines:
+            ctk.CTkLabel(dialog, text=line, font=ctk.CTkFont(size=13)).pack(anchor="w", padx=20, pady=1)
+
+        button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=(15, 10))
+
+        if not self.dry_run_var.get():
+            ctk.CTkButton(
+                button_frame, text="Ordner öffnen", command=lambda: [self._open_output_folder(), dialog.destroy()]
+            ).pack(side="left", expand=True, padx=5)
+
+        ctk.CTkButton(button_frame, text="Schliessen", command=dialog.destroy).pack(side="left", expand=True, padx=5)
 
     def _open_output_folder(self):
         """Open output folder in system file browser."""
