@@ -217,3 +217,84 @@ def deduplicate_clips(
                     break  # i is removed, move on
 
     return [i for i in range(n) if i not in removed]
+
+
+@dataclass
+class HighlightScene:
+    start_seconds: float
+    end_seconds: float
+    score: float
+    clip_score: Optional[float] = None
+
+
+def extract_highlights(
+    path: Path,
+    max_clips: int = 2,
+    clip_model=None,
+    pos_features=None,
+    neg_features=None,
+) -> list[HighlightScene]:
+    """Detect scenes in a long video and return the best ones.
+
+    Uses PySceneDetect for scene detection, then scores each scene's
+    midpoint frame on sharpness + brightness (+ optional CLIP).
+    """
+    from scenedetect import open_video, SceneManager
+    from scenedetect.detectors import AdaptiveDetector
+
+    video = open_video(str(path))
+    scene_manager = SceneManager()
+    scene_manager.add_detector(AdaptiveDetector())
+    scene_manager.detect_scenes(video)
+    scene_list = scene_manager.get_scene_list()
+
+    if not scene_list:
+        return []
+
+    # Score each scene by its midpoint frame
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return []
+
+    scenes: list[HighlightScene] = []
+
+    try:
+        for start_time, end_time in scene_list:
+            start_s = start_time.get_seconds()
+            end_s = end_time.get_seconds()
+            mid_s = (start_s + end_s) / 2.0
+
+            # Seek to midpoint
+            cap.set(cv2.CAP_PROP_POS_MSEC, mid_s * 1000)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            tech_score = _score_frame_technical(frame)
+
+            scene_clip_score = None
+            if clip_model is not None and pos_features is not None and neg_features is not None:
+                from scorer import _compute_clip_score
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
+                emb = clip_model.encode_image(pil_img)
+                scene_clip_score = _compute_clip_score(emb, pos_features, neg_features, clip_model.device)
+                overall = 0.4 * tech_score + 0.6 * scene_clip_score
+            else:
+                overall = tech_score
+
+            scenes.append(HighlightScene(
+                start_seconds=start_s,
+                end_seconds=end_s,
+                score=overall,
+                clip_score=scene_clip_score,
+            ))
+    finally:
+        cap.release()
+
+    # Return top N scenes sorted by score
+    scenes.sort(key=lambda s: s.score, reverse=True)
+    best = scenes[:max_clips]
+    # Sort by time for chronological output
+    best.sort(key=lambda s: s.start_seconds)
+    return best
