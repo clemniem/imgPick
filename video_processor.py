@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -298,3 +300,39 @@ def extract_highlights(
     # Sort by time for chronological output
     best.sort(key=lambda s: s.start_seconds)
     return best
+
+
+def export_clip(
+    input_path: Path,
+    start_seconds: float,
+    end_seconds: float,
+    output_path: Path,
+) -> bool:
+    """Export a video clip using FFmpeg stream copy (no re-encoding).
+
+    Returns True on success, False on failure.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-ss", f"{start_seconds:.3f}",
+        "-to", f"{end_seconds:.3f}",
+        "-i", str(input_path),
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        str(output_path),
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+
+    return result.returncode == 0 and output_path.exists()
