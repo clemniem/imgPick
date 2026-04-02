@@ -108,3 +108,32 @@ def export_highlights(
             output_paths.append(dst)
 
     return output_paths
+
+
+def write_report(
+    report_path: Path,
+    settings: dict,
+    photos: dict,
+    short_clips: dict,
+    long_videos: dict,
+) -> None:
+    """Write JSON report with scores, statistics, and file details.
+
+    Args:
+        report_path: Where to write the JSON file.
+        settings: Dict of CLI settings used.
+        photos: {total, duplicates_removed, selected, files: [{name, score, selected, duplicate_of}]}
+        short_clips: {total, selected, files: [{name, score, selected}]}
+        long_videos: {total, highlights_created, files: [{name, scenes: [{start, end, score}]}]}
+    """
+    report = {
+        "settings": settings,
+        "photos": photos,
+        "short_clips": short_clips,
+        "long_videos": long_videos,
+    }
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False, default=str)
