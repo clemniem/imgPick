@@ -177,6 +177,7 @@ imgPick/
 ├── video_processor.py   # Szenenerkennung + Clip-Export
 ├── exif_reader.py       # Metadaten-Extraktion
 ├── exporter.py          # Datei-Kopieren, Sortierung und Berichterstellung
+├── setup.bat            # Windows-Setup: Doppelklick genügt (startet setup.ps1)
 ├── setup.ps1            # Windows-Setup (PowerShell): installiert alles + erstellt start.bat
 └── README.md            # Installationsanleitung
 ```
@@ -432,10 +433,10 @@ Falls `--dry-run` aktiv: diesen Schritt überspringen, nur den Report erstellen 
 
 ### Windows: Schnellstart mit Setup-Script
 
-Für Windows-Nutzer gibt es ein PowerShell-Script `setup.ps1`, das alles automatisch erledigt:
+Für Windows-Nutzer gibt es ein Setup-Script, das alles automatisch erledigt:
 
 ```
-Doppelklick auf setup.ps1 (Rechtsklick → "Mit PowerShell ausführen")
+Doppelklick auf setup.bat
 ```
 
 Das Script:

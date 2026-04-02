@@ -1,7 +1,14 @@
 # imgPick — Windows Setup Script
-# Rechtsklick → "Mit PowerShell ausführen" oder: powershell -ExecutionPolicy Bypass -File setup.ps1
+# Am einfachsten: Doppelklick auf setup.bat
+# Alternativ: powershell -ExecutionPolicy Bypass -File setup.ps1
 
 $ErrorActionPreference = "Stop"
+
+trap {
+    Write-Host "`n[X] Unerwarteter Fehler: $_" -ForegroundColor Red
+    Read-Host "Enter druecken zum Beenden"
+    exit 1
+}
 
 function Write-Step($msg) {
     Write-Host "`n[$([char]0x2192)] $msg" -ForegroundColor Cyan
