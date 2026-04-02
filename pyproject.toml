@@ -1,0 +1,16 @@
+[project]
+name = "imgpick"
+version = "0.1.0"
+description = "Lokaler KI-Medienpicker für Urlaubsfotos und -videos"
+requires-python = ">=3.11"
+dependencies = [
+    "open-clip-torch",
+    "opencv-python",
+    "scenedetect[opencv]",
+    "Pillow",
+    "pillow-heif",
+    "imagehash",
+    "exifread",
+    "tqdm",
+    "customtkinter",
+]
