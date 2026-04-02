@@ -1,13 +1,26 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
+import torch
 from PIL import Image
 
 # Register HEIC support
 import pillow_heif
 pillow_heif.register_heif_opener()
+
+DEFAULT_POSITIVE_PROMPTS = [
+    "a beautiful vacation photo",
+    "a stunning landscape",
+    "happy people on holiday",
+]
+DEFAULT_NEGATIVE_PROMPTS = [
+    "a blurry photo",
+    "an overexposed image",
+    "a dark underexposed photo",
+]
 
 
 @dataclass
@@ -17,6 +30,12 @@ class TechScore:
     contrast: float
     resolution: float
     overall: float
+
+
+@dataclass
+class ClipResult:
+    score: float
+    embedding: np.ndarray
 
 
 def score_technical(path: Path) -> TechScore:
@@ -78,3 +97,62 @@ def _score_resolution(arr: np.ndarray) -> float:
     h, w = arr.shape[:2]
     megapixels = (h * w) / 1_000_000
     return min(1.0, megapixels / 12.0)
+
+
+# --- CLIP Scoring ---
+
+class ClipModel:
+    """Wrapper around open_clip for scoring images against text prompts."""
+
+    def __init__(self):
+        import open_clip
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-32", pretrained="openai", device=self.device,
+        )
+        self.tokenizer = open_clip.get_tokenizer("ViT-B-32")
+        self.model.eval()
+
+    @torch.no_grad()
+    def encode_text(self, prompts: list[str]) -> torch.Tensor:
+        """Encode text prompts into normalized embeddings."""
+        tokens = self.tokenizer(prompts).to(self.device)
+        text_features = self.model.encode_text(tokens)
+        text_features /= text_features.norm(dim=-1, keepdim=True)
+        return text_features
+
+    @torch.no_grad()
+    def encode_image(self, img: Image.Image) -> np.ndarray:
+        """Encode a single PIL image into a normalized embedding."""
+        image_input = self.preprocess(img).unsqueeze(0).to(self.device)
+        image_features = self.model.encode_image(image_input)
+        image_features /= image_features.norm(dim=-1, keepdim=True)
+        return image_features.cpu().numpy().squeeze()
+
+
+def score_clip(
+    path: Path,
+    clip_model: ClipModel,
+    positive_prompts: list[str],
+    negative_prompts: list[str],
+) -> ClipResult:
+    """Score a photo using CLIP similarity to text prompts.
+
+    Returns ClipResult with score (0.0–1.0) and the image embedding.
+    """
+    img = Image.open(path).convert("RGB")
+    embedding = clip_model.encode_image(img)
+
+    pos_features = clip_model.encode_text(positive_prompts)
+    neg_features = clip_model.encode_text(negative_prompts)
+
+    emb_tensor = torch.from_numpy(embedding).unsqueeze(0).to(clip_model.device)
+
+    pos_sim = (emb_tensor @ pos_features.T).mean().item()
+    neg_sim = (emb_tensor @ neg_features.T).mean().item()
+
+    raw_score = pos_sim - neg_sim
+    score = max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
+
+    return ClipResult(score=score, embedding=embedding)
