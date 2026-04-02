@@ -76,18 +76,30 @@ if (-not $python) {
     exit 1
 }
 
-$pyVersion = & python --version 2>&1
-$versionMatch = [regex]::Match($pyVersion, "(\d+)\.(\d+)")
-$major = [int]$versionMatch.Groups[1].Value
-$minor = [int]$versionMatch.Groups[2].Value
+try {
+    $pyVersionRaw = & python --version 2>&1
+    $pyVersion = "$pyVersionRaw"
+    $versionMatch = [regex]::Match($pyVersion, "(\d+)\.(\d+)")
+    if (-not $versionMatch.Success) {
+        throw "Konnte Python-Version nicht erkennen: $pyVersion"
+    }
+    $major = [int]$versionMatch.Groups[1].Value
+    $minor = [int]$versionMatch.Groups[2].Value
 
-if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 11)) {
-    Write-Fail "Python $major.$minor gefunden, aber 3.11+ wird benoetigt."
-    Write-Host "    Bitte aktualisieren: https://www.python.org/downloads/"
+    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 11)) {
+        Write-Fail "Python $major.$minor gefunden, aber 3.11+ wird benoetigt."
+        Write-Host "    Bitte aktualisieren: https://www.python.org/downloads/"
+        Read-Host "    Enter druecken zum Beenden"
+        exit 1
+    }
+    Write-Ok "Python $major.$minor"
+} catch {
+    Write-Fail "Python-Version konnte nicht geprueft werden: $_"
+    Write-Host "    Falls der Windows Store sich oeffnet: Bitte Python von https://www.python.org/downloads/ installieren"
+    Write-Host "    und den Windows Store-Alias deaktivieren (Einstellungen > Apps > App-Ausfuehrungsaliase)"
     Read-Host "    Enter druecken zum Beenden"
     exit 1
 }
-Write-Ok "Python $major.$minor"
 
 # --- uv pruefen / installieren ---
 Write-Step "uv (Paketmanager) pruefen..."
