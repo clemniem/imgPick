@@ -1,25 +1,22 @@
 import json
 import shutil
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 def export_photos(
     photos: list[dict],
     output_dir: Path,
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """Copy selected photos to output directory, sorted chronologically.
 
     Each photo dict must have: 'path' (Path), 'date_taken' (datetime or None),
     'date_source' (str).
 
-    Returns list of output paths.
+    Returns (output_paths, warnings).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sort by date_taken, None goes to end
     sorted_photos = sorted(
         photos,
         key=lambda p: p["date_taken"] or datetime.max,
@@ -27,7 +24,7 @@ def export_photos(
 
     warnings = []
     output_paths = []
-    num_digits = len(str(len(sorted_photos)))
+    num_digits = len(str(len(sorted_photos))) if sorted_photos else 1
 
     for i, photo in enumerate(sorted_photos, start=1):
         src = photo["path"]
@@ -37,8 +34,11 @@ def export_photos(
         if photo["date_source"] == "none":
             warnings.append(f"WARN:Kein Aufnahmedatum für {src.name} — Datei wird ans Ende sortiert")
 
-        shutil.copy2(src, dst)
-        output_paths.append(dst)
+        try:
+            shutil.copy2(src, dst)
+            output_paths.append(dst)
+        except OSError as e:
+            warnings.append(f"WARN:Foto konnte nicht kopiert werden – {src.name}: {e}")
 
     return output_paths, warnings
 
@@ -46,13 +46,12 @@ def export_photos(
 def export_short_clips(
     clips: list[dict],
     output_dir: Path,
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """Copy selected short clips to output_dir/videos/, sorted chronologically.
 
     Each clip dict must have: 'path' (Path), 'date_modified' (datetime or None).
-    Uses file mtime for sorting since videos typically lack EXIF.
 
-    Returns list of output paths.
+    Returns (output_paths, warnings).
     """
     video_dir = output_dir / "videos"
     video_dir.mkdir(parents=True, exist_ok=True)
@@ -63,16 +62,20 @@ def export_short_clips(
     )
 
     output_paths = []
+    warnings = []
     num_digits = len(str(len(sorted_clips))) if sorted_clips else 1
 
     for i, clip in enumerate(sorted_clips, start=1):
         src = clip["path"]
         prefix = str(i).zfill(num_digits)
         dst = video_dir / f"{prefix}_{src.name}"
-        shutil.copy2(src, dst)
-        output_paths.append(dst)
+        try:
+            shutil.copy2(src, dst)
+            output_paths.append(dst)
+        except OSError as e:
+            warnings.append(f"WARN:Clip konnte nicht kopiert werden – {src.name}: {e}")
 
-    return output_paths
+    return output_paths, warnings
 
 
 def export_highlights(
@@ -103,9 +106,12 @@ def export_highlights(
 
         dst = video_dir / f"highlight_{src_stem}_{idx:02d}{suffix}"
 
-        success = export_clip(h["input_path"], start, end, dst)
-        if success:
-            output_paths.append(dst)
+        try:
+            success = export_clip(h["input_path"], start, end, dst)
+            if success:
+                output_paths.append(dst)
+        except Exception:
+            pass  # Caller checks len(output_paths) for reporting
 
     return output_paths
 
@@ -117,15 +123,7 @@ def write_report(
     short_clips: dict,
     long_videos: dict,
 ) -> None:
-    """Write JSON report with scores, statistics, and file details.
-
-    Args:
-        report_path: Where to write the JSON file.
-        settings: Dict of CLI settings used.
-        photos: {total, duplicates_removed, selected, files: [{name, score, selected, duplicate_of}]}
-        short_clips: {total, selected, files: [{name, score, selected}]}
-        long_videos: {total, highlights_created, files: [{name, scenes: [{start, end, score}]}]}
-    """
+    """Write JSON report with scores, statistics, and file details."""
     report = {
         "settings": settings,
         "photos": photos,

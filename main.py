@@ -129,7 +129,11 @@ def main(argv: list[str] | None = None) -> None:
     # --- Step 1: Validate ---
     if not args.no_video:
         from utils import check_ffmpeg
-        check_ffmpeg()
+        try:
+            check_ffmpeg()
+        except SystemExit as e:
+            log(f"ERROR:{e}")
+            sys.exit(1)
 
     # --- Step 2: Scan files ---
     photo_paths, video_paths = scan_files(args.input_folder, not args.no_recursive)
@@ -154,11 +158,19 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_clip:
         from scorer import ClipModel
         log("STATUS:model:Lade CLIP-Modell...")
-        clip_model = ClipModel()
-        pos_features, neg_features = clip_model.prepare_prompts(
-            args.positive_prompts, args.negative_prompts
-        )
-        log("STATUS:model:CLIP-Modell geladen (ViT-B-32)")
+        try:
+            clip_model = ClipModel()
+            pos_features, neg_features = clip_model.prepare_prompts(
+                args.positive_prompts, args.negative_prompts
+            )
+            log("STATUS:model:CLIP-Modell geladen (ViT-B-32)")
+        except Exception as e:
+            log(f"ERROR:CLIP-Modell konnte nicht geladen werden: {e}")
+            log("STATUS:model:Fahre ohne CLIP fort (nur technischer Score)")
+            clip_model = None
+            pos_features = None
+            neg_features = None
+            args.no_clip = True
 
     # --- Step 4: Score photos ---
     from exif_reader import read_exif
@@ -178,58 +190,77 @@ def main(argv: list[str] | None = None) -> None:
                 clip_s = f", clip={result.clip_result.score:.3f}" if result.clip_result else ""
                 log(f"  {path.name}: tech={result.tech_score.overall:.3f}{clip_s}, overall={result.overall_score:.3f}")
         except Exception as e:
-            log(f"WARN:Fehler bei {path.name}: {e}")
+            log(f"WARN:Foto übersprungen – {path.name}: {type(e).__name__}: {e}")
+
+    if not photo_results and not short_clips and not long_videos:
+        log("ERROR:Keine Fotos konnten bewertet werden")
+        sys.exit(1)
 
     # --- Step 5: Deduplicate photos ---
     duplicates_removed = 0
     kept_photo_indices = list(range(len(photo_results)))
 
     if not args.no_dedup and len(photo_results) > 1:
-        # Sort by date for series detection
         sorted_indices = sorted(
             range(len(photo_results)),
             key=lambda i: photo_results[i].date_taken or datetime.max,
         )
 
-        if not args.no_clip and clip_model is not None:
-            from deduplicator import deduplicate_clip
-            embeddings = [r.clip_result.embedding for r in photo_results]
-            scores = [r.overall_score for r in photo_results]
-            kept_photo_indices, groups = deduplicate_clip(
-                embeddings, scores, sorted_indices, args.dedup_threshold
-            )
-        else:
-            from deduplicator import deduplicate_phash, compute_phash
-            log("PROGRESS:dedup:0:0:pHash berechnen...")
-            hashes = []
-            for i, r in enumerate(photo_results):
-                log(f"PROGRESS:dedup:{i + 1}:{len(photo_results)}")
-                hashes.append(compute_phash(r.path))
-            scores = [r.overall_score for r in photo_results]
-            kept_photo_indices, groups = deduplicate_phash(
-                hashes, scores, sorted_indices
-            )
+        try:
+            if not args.no_clip and clip_model is not None:
+                from deduplicator import deduplicate_clip
+                embeddings = []
+                for r in photo_results:
+                    if r.clip_result is not None and r.clip_result.embedding is not None:
+                        embeddings.append(r.clip_result.embedding)
+                    else:
+                        import numpy as np
+                        embeddings.append(np.zeros(512, dtype=np.float32))
+                scores = [r.overall_score for r in photo_results]
+                kept_photo_indices, groups = deduplicate_clip(
+                    embeddings, scores, sorted_indices, args.dedup_threshold
+                )
+            else:
+                from deduplicator import deduplicate_phash, compute_phash
+                log("PROGRESS:dedup:0:0:pHash berechnen...")
+                hashes = []
+                for i, r in enumerate(photo_results):
+                    log(f"PROGRESS:dedup:{i + 1}:{len(photo_results)}")
+                    try:
+                        hashes.append(compute_phash(r.path))
+                    except Exception as e:
+                        log(f"WARN:pHash fehlgeschlagen für {r.path.name}: {type(e).__name__}: {e}")
+                        import imagehash
+                        hashes.append(imagehash.phash(None) if False else imagehash.ImageHash(np.zeros((8, 8), dtype=bool)))
+                scores = [r.overall_score for r in photo_results]
+                kept_photo_indices, groups = deduplicate_phash(
+                    hashes, scores, sorted_indices
+                )
 
-        duplicates_removed = len(photo_results) - len(kept_photo_indices)
-        log(f"STATUS:dedup:Duplikate: {duplicates_removed} Fotos entfernt")
+            duplicates_removed = len(photo_results) - len(kept_photo_indices)
+            log(f"STATUS:dedup:Duplikate: {duplicates_removed} Fotos entfernt")
+        except Exception as e:
+            log(f"WARN:Duplikaterkennung fehlgeschlagen: {type(e).__name__}: {e}")
+            log("WARN:Fahre ohne Duplikaterkennung fort")
+            kept_photo_indices = list(range(len(photo_results)))
 
     # --- Step 6: Select top photos ---
     kept_results = [photo_results[i] for i in kept_photo_indices]
     kept_results.sort(key=lambda r: r.overall_score, reverse=True)
 
-    num_keep = max(1, math.ceil(len(kept_results) * args.top_percent / 100))
+    num_keep = max(1, math.ceil(len(kept_results) * args.top_percent / 100)) if kept_results else 0
     selected_photos = kept_results[:num_keep]
 
     log(f"STATUS:select:Foto-Auswahl: {len(selected_photos)} von {len(photo_results)} Fotos behalten ({args.top_percent}%)")
 
     # --- Step 7: Score and deduplicate short clips ---
     selected_clips = []
+    clip_scores = []
     clip_dedup_removed = 0
 
     if short_clips:
         from video_processor import score_short_clip, deduplicate_clips
 
-        clip_scores = []
         for i, info in enumerate(short_clips):
             log(f"PROGRESS:clips:{i + 1}:{len(short_clips)}:{info.path.name}")
             try:
@@ -238,26 +269,32 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 if cs:
                     clip_scores.append(cs)
+                else:
+                    log(f"WARN:Clip konnte nicht bewertet werden: {info.path.name}")
             except Exception as e:
-                log(f"WARN:Fehler bei Clip {info.path.name}: {e}")
+                log(f"WARN:Clip übersprungen – {info.path.name}: {type(e).__name__}: {e}")
 
         # Deduplicate
         if not args.no_dedup and clip_scores:
-            kept_clip_indices = deduplicate_clips(clip_scores, args.dedup_threshold)
-            clip_dedup_removed = len(clip_scores) - len(kept_clip_indices)
-            clip_scores = [clip_scores[i] for i in kept_clip_indices]
-            if clip_dedup_removed > 0:
-                log(f"STATUS:dedup_clips:Kurzclip-Duplikate: {clip_dedup_removed} entfernt")
+            try:
+                kept_clip_indices = deduplicate_clips(clip_scores, args.dedup_threshold)
+                clip_dedup_removed = len(clip_scores) - len(kept_clip_indices)
+                clip_scores = [clip_scores[i] for i in kept_clip_indices]
+                if clip_dedup_removed > 0:
+                    log(f"STATUS:dedup_clips:Kurzclip-Duplikate: {clip_dedup_removed} entfernt")
+            except Exception as e:
+                log(f"WARN:Kurzclip-Duplikaterkennung fehlgeschlagen: {type(e).__name__}: {e}")
 
         # Select top percent
-        clip_scores.sort(key=lambda c: c.overall_score, reverse=True)
-        num_keep_clips = max(1, math.ceil(len(clip_scores) * args.top_percent_videos / 100))
-        selected_clips = clip_scores[:num_keep_clips]
+        if clip_scores:
+            clip_scores.sort(key=lambda c: c.overall_score, reverse=True)
+            num_keep_clips = max(1, math.ceil(len(clip_scores) * args.top_percent_videos / 100))
+            selected_clips = clip_scores[:num_keep_clips]
 
         log(f"STATUS:select_clips:Kurzclips: {len(selected_clips)} von {len(short_clips)} behalten ({args.top_percent_videos}%)")
 
     # --- Step 8: Process long videos ---
-    all_highlights = []  # list of dicts for export
+    all_highlights = []
 
     if long_videos:
         from video_processor import extract_highlights
@@ -284,41 +321,55 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 log(f"  {info.path.name} ({dur}): {len(scenes)} Highlights ({scene_desc})")
             except Exception as e:
-                log(f"WARN:Fehler bei Video {info.path.name}: {e}")
+                log(f"WARN:Video übersprungen – {info.path.name}: {type(e).__name__}: {e}")
 
     # --- Step 9: Export ---
     if not args.dry_run:
         from exporter import export_photos, export_short_clips, export_highlights
 
         # Photos
-        photo_dicts = [
-            {"path": r.path, "date_taken": r.date_taken, "date_source": r.date_source}
-            for r in selected_photos
-        ]
-        exported_photos, photo_warnings = export_photos(photo_dicts, args.output_folder)
-        for w in photo_warnings:
-            log(w)
-        log(f"PROGRESS:export:{len(exported_photos)}:{len(exported_photos)}:Fotos exportiert")
+        if selected_photos:
+            photo_dicts = [
+                {"path": r.path, "date_taken": r.date_taken, "date_source": r.date_source}
+                for r in selected_photos
+            ]
+            try:
+                exported_photos, photo_warnings = export_photos(photo_dicts, args.output_folder)
+                for w in photo_warnings:
+                    log(w)
+                log(f"PROGRESS:export:{len(exported_photos)}:{len(exported_photos)}:Fotos exportiert")
+            except Exception as e:
+                log(f"ERROR:Fehler beim Exportieren der Fotos: {type(e).__name__}: {e}")
 
         # Short clips
         if selected_clips:
-            clip_dicts = [
-                {
-                    "path": c.path,
-                    "date_modified": datetime.fromtimestamp(c.path.stat().st_mtime),
-                }
-                for c in selected_clips
-            ]
-            export_short_clips(clip_dicts, args.output_folder)
+            try:
+                clip_dicts = [
+                    {
+                        "path": c.path,
+                        "date_modified": datetime.fromtimestamp(c.path.stat().st_mtime)
+                        if c.path.exists() else None,
+                    }
+                    for c in selected_clips
+                ]
+                exported_clips, clip_warnings = export_short_clips(clip_dicts, args.output_folder)
+                for w in clip_warnings:
+                    log(w)
+                log(f"PROGRESS:export:0:0:{len(exported_clips)} Kurzclips exportiert")
+            except Exception as e:
+                log(f"ERROR:Fehler beim Exportieren der Kurzclips: {type(e).__name__}: {e}")
 
         # Highlights
         if all_highlights:
-            export_highlights(all_highlights, args.output_folder)
+            try:
+                exported_hl = export_highlights(all_highlights, args.output_folder)
+                log(f"PROGRESS:export:0:0:{len(exported_hl)} Highlight-Clips exportiert")
+            except Exception as e:
+                log(f"ERROR:Fehler beim Exportieren der Highlights: {type(e).__name__}: {e}")
 
     # --- Step 10: Report ---
     from exporter import write_report
 
-    # Build file lists for report
     selected_paths = {r.path for r in selected_photos}
     photo_files = [
         {
@@ -336,7 +387,7 @@ def main(argv: list[str] | None = None) -> None:
             "selected": cs in selected_clips,
         }
         for cs in clip_scores
-    ] if short_clips else []
+    ]
 
     video_files = []
     for info in long_videos:
@@ -364,27 +415,30 @@ def main(argv: list[str] | None = None) -> None:
         "dry_run": args.dry_run,
     }
 
-    write_report(
-        args.json_report,
-        settings=settings,
-        photos={
-            "total": len(photo_results),
-            "duplicates_removed": duplicates_removed,
-            "selected": len(selected_photos),
-            "files": photo_files,
-        },
-        short_clips={
-            "total": len(short_clips),
-            "duplicates_removed": clip_dedup_removed,
-            "selected": len(selected_clips),
-            "files": clip_files,
-        },
-        long_videos={
-            "total": len(long_videos),
-            "highlights_created": len(all_highlights),
-            "files": video_files,
-        },
-    )
+    try:
+        write_report(
+            args.json_report,
+            settings=settings,
+            photos={
+                "total": len(photo_results),
+                "duplicates_removed": duplicates_removed,
+                "selected": len(selected_photos),
+                "files": photo_files,
+            },
+            short_clips={
+                "total": len(short_clips),
+                "duplicates_removed": clip_dedup_removed,
+                "selected": len(selected_clips),
+                "files": clip_files,
+            },
+            long_videos={
+                "total": len(long_videos),
+                "highlights_created": len(all_highlights),
+                "files": video_files,
+            },
+        )
+    except Exception as e:
+        log(f"ERROR:JSON-Report konnte nicht geschrieben werden: {type(e).__name__}: {e}")
 
     # Summary
     log("STATUS:done:Fertig!")

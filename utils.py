@@ -29,12 +29,21 @@ def check_ffmpeg() -> Path:
 
 
 def open_folder(path: Path) -> None:
-    """Open a folder in the platform's file browser."""
-    system = platform.system()
-    if system == "Darwin":
-        subprocess.Popen(["open", str(path)])
-    elif system == "Windows":
-        import os
-        os.startfile(str(path))
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
+    """Open a folder in the platform's file browser.
+
+    Silently fails if the folder doesn't exist or the command is unavailable.
+    """
+    if not path.is_dir():
+        return
+
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.Popen(["open", str(path)])
+        elif system == "Windows":
+            import os
+            os.startfile(str(path))
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except OSError:
+        pass  # Best-effort — don't crash if file browser can't open

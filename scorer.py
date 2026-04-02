@@ -242,8 +242,9 @@ def score_clip_batch(
                 img = Image.open(path).convert("RGB")
                 images.append(img)
                 valid_indices.append(batch_start + i)
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"WARN:Bild konnte nicht geladen werden – {path.name}: {type(e).__name__}: {e}", file=sys.stderr)
 
         if not images:
             continue
