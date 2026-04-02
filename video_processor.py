@@ -4,6 +4,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+from PIL import Image
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mts"}
 
@@ -67,3 +68,112 @@ def categorize_videos(
             long_videos.append(info)
 
     return short_clips, long_videos
+
+
+@dataclass
+class ClipScore:
+    path: Path
+    tech_score: float
+    clip_score: Optional[float]
+    overall_score: float
+    embedding: Optional[np.ndarray]  # average CLIP embedding across sampled frames
+
+
+def _sample_frames(path: Path, num_frames: int = 10) -> list[np.ndarray]:
+    """Sample evenly distributed frames from a video as BGR arrays."""
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return []
+
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return []
+
+        indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+        frames = []
+
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+            ret, frame = cap.read()
+            if ret:
+                frames.append(frame)
+
+        return frames
+    finally:
+        cap.release()
+
+
+def _score_frame_technical(frame_bgr: np.ndarray) -> float:
+    """Score a single video frame on sharpness + brightness (0.0–1.0)."""
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    # Sharpness
+    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+    sharpness = min(1.0, variance / 500.0)
+
+    # Brightness
+    mean = float(gray.mean())
+    if 80 <= mean <= 180:
+        brightness = 1.0
+    elif mean < 80:
+        brightness = max(0.0, mean / 80.0)
+    else:
+        brightness = max(0.0, (255.0 - mean) / 75.0)
+
+    return 0.6 * sharpness + 0.4 * brightness
+
+
+def score_short_clip(
+    path: Path,
+    clip_model=None,
+    pos_features=None,
+    neg_features=None,
+    tech_weight: float = 0.4,
+    num_frames: int = 10,
+) -> Optional[ClipScore]:
+    """Score a short video clip by sampling frames.
+
+    Returns None if the video can't be read.
+    """
+    frames = _sample_frames(path, num_frames)
+    if not frames:
+        return None
+
+    # Technical score: average across frames
+    tech_scores = [_score_frame_technical(f) for f in frames]
+    avg_tech = sum(tech_scores) / len(tech_scores)
+
+    # CLIP score: average across frames (if model provided)
+    avg_clip_score = None
+    avg_embedding = None
+
+    if clip_model is not None and pos_features is not None and neg_features is not None:
+        from scorer import _compute_clip_score
+
+        embeddings = []
+        clip_scores = []
+
+        for frame_bgr in frames:
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(frame_rgb)
+            emb = clip_model.encode_image(pil_img)
+            embeddings.append(emb)
+            cs = _compute_clip_score(emb, pos_features, neg_features, clip_model.device)
+            clip_scores.append(cs)
+
+        avg_clip_score = sum(clip_scores) / len(clip_scores)
+        avg_embedding = np.mean(embeddings, axis=0)
+        avg_embedding /= np.linalg.norm(avg_embedding)
+
+        overall = tech_weight * avg_tech + (1.0 - tech_weight) * avg_clip_score
+    else:
+        overall = avg_tech
+
+    return ClipScore(
+        path=path,
+        tech_score=avg_tech,
+        clip_score=avg_clip_score,
+        overall_score=overall,
+        embedding=avg_embedding,
+    )
