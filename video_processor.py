@@ -177,3 +177,43 @@ def score_short_clip(
         overall_score=overall,
         embedding=avg_embedding,
     )
+
+
+def deduplicate_clips(
+    clip_scores: list[ClipScore],
+    threshold: float = 0.95,
+) -> list[int]:
+    """Deduplicate short clips by CLIP embedding similarity.
+
+    Pairwise comparison (O(n²), fine for typical clip counts).
+    Returns indices into clip_scores to keep.
+    Only works when embeddings are available (CLIP mode).
+    """
+    if not clip_scores:
+        return []
+
+    n = len(clip_scores)
+    # Skip if no embeddings
+    if clip_scores[0].embedding is None:
+        return list(range(n))
+
+    from deduplicator import _cosine_similarity
+
+    removed: set[int] = set()
+
+    for i in range(n):
+        if i in removed:
+            continue
+        for j in range(i + 1, n):
+            if j in removed:
+                continue
+            sim = _cosine_similarity(clip_scores[i].embedding, clip_scores[j].embedding)
+            if sim >= threshold:
+                # Remove the one with the lower score
+                if clip_scores[i].overall_score >= clip_scores[j].overall_score:
+                    removed.add(j)
+                else:
+                    removed.add(i)
+                    break  # i is removed, move on
+
+    return [i for i in range(n) if i not in removed]
