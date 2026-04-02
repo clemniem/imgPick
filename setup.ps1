@@ -11,7 +11,7 @@ trap {
 }
 
 function Write-Step($msg) {
-    Write-Host "`n[$([char]0x2192)] $msg" -ForegroundColor Cyan
+    Write-Host "`n[>>] $msg" -ForegroundColor Cyan
 }
 
 function Write-Ok($msg) {
