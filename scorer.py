@@ -38,6 +38,45 @@ class ClipResult:
     embedding: np.ndarray
 
 
+@dataclass
+class PhotoResult:
+    path: Path
+    tech_score: TechScore
+    clip_result: Optional[ClipResult]
+    overall_score: float
+    date_taken: Optional[object] = None  # datetime, filled by caller
+    date_source: str = ""
+
+
+def score_photo(
+    path: Path,
+    clip_model: Optional["ClipModel"] = None,
+    pos_features: Optional[torch.Tensor] = None,
+    neg_features: Optional[torch.Tensor] = None,
+    tech_weight: float = 0.4,
+) -> PhotoResult:
+    """Score a photo combining technical and CLIP scores.
+
+    tech_weight controls the blend: overall = tech_weight * tech + (1 - tech_weight) * clip.
+    If clip_model is None, uses 100% technical score.
+    """
+    tech = score_technical(path)
+
+    clip_result = None
+    if clip_model is not None and pos_features is not None and neg_features is not None:
+        clip_result = score_clip(path, clip_model, pos_features, neg_features)
+        overall = tech_weight * tech.overall + (1.0 - tech_weight) * clip_result.score
+    else:
+        overall = tech.overall
+
+    return PhotoResult(
+        path=path,
+        tech_score=tech,
+        clip_result=clip_result,
+        overall_score=overall,
+    )
+
+
 def score_technical(path: Path) -> TechScore:
     """Score a photo on technical quality metrics.
 
