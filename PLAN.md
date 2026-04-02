@@ -171,12 +171,13 @@ imgPick/
 ├── PLAN.md
 ├── pyproject.toml       # uv-Projektdefinition + Dependencies
 ├── main.py              # CLI-Einstiegspunkt (argparse)
-├── gui.py               # Tkinter-Oberfläche, ruft main.py als Subprocess auf
+├── gui.py               # customtkinter-Oberfläche, ruft main.py als Subprocess auf
 ├── scorer.py            # Foto-Bewertungslogik (technisch + CLIP)
-├── deduplicator.py      # Duplikaterkennung via CLIP-Embeddings
+├── deduplicator.py      # Duplikaterkennung (CLIP + pHash-Fallback)
 ├── video_processor.py   # Szenenerkennung + Clip-Export
 ├── exif_reader.py       # Metadaten-Extraktion
 ├── exporter.py          # Datei-Kopieren, Sortierung und Berichterstellung
+├── setup.ps1            # Windows-Setup (PowerShell): installiert alles + erstellt start.bat
 └── README.md            # Installationsanleitung
 ```
 
@@ -401,3 +402,104 @@ Falls `--dry-run` aktiv: diesen Schritt überspringen, nur den Report erstellen 
 9. App analysiert 3 lange Videos, erstellt je 2 Highlight-Clips = 6 Clips
 10. Ausgabeordner enthält 156 Fotos + 25 Kurzclips + 6 Highlights, chronologisch sortiert
 11. Nutzer lädt diesen Ordner direkt bei Google Photos / Apple Photos hoch
+
+---
+
+## Installation & Start
+
+### Voraussetzungen
+
+- **Python 3.11+** — [python.org](https://www.python.org/downloads/)
+- **uv** — Paketmanager für Python
+  ```bash
+  # macOS / Linux
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+- **ffmpeg** (nur für Video-Verarbeitung) — [ffmpeg.org](https://ffmpeg.org/download.html)
+  ```bash
+  # macOS
+  brew install ffmpeg
+
+  # Ubuntu / Debian
+  sudo apt install ffmpeg
+
+  # Windows (winget)
+  winget install FFmpeg
+  ```
+
+### Windows: Schnellstart mit Setup-Script
+
+Für Windows-Nutzer gibt es ein PowerShell-Script `setup.ps1`, das alles automatisch erledigt:
+
+```
+Doppelklick auf setup.ps1 (Rechtsklick → "Mit PowerShell ausführen")
+```
+
+Das Script:
+1. Prüft ob Python 3.11+ installiert ist — falls nicht, Hinweis mit Download-Link
+2. Installiert `uv` automatisch (falls nicht vorhanden)
+3. Führt `uv sync` aus (installiert alle Python-Dependencies)
+4. Prüft ob ffmpeg installiert ist — falls nicht, installiert es via `winget` (optional)
+5. Startet die GUI
+
+Danach reicht ein Doppelklick auf `start.bat` um die GUI zu starten.
+
+### Projekt manuell einrichten (alle Plattformen)
+
+```bash
+# Repository klonen
+git clone <repo-url>
+cd imgPick
+
+# Dependencies installieren (erstellt automatisch ein Virtualenv)
+uv sync
+```
+
+Beim ersten Start wird das CLIP-Modell automatisch heruntergeladen (~350 MB). Danach wird es aus dem Cache geladen.
+
+### CLI starten
+
+```bash
+# Einfachster Aufruf — Top 30% Fotos behalten, alle Defaults
+uv run python main.py /pfad/zum/urlaubsordner /pfad/zum/output
+
+# Nur Fotos, kein Video, kein CLIP (schnell, nur technische Bewertung)
+uv run python main.py ./fotos ./output --no-clip --no-video
+
+# Strandurlaub mit angepassten Prompts, 40% behalten
+uv run python main.py ./urlaub ./auswahl \
+  --top-percent 40 \
+  --positive-prompts "beautiful beach sunset,crystal clear water,tropical paradise" \
+  --negative-prompts "blurry photo,dark image,overexposed"
+
+# Dry-Run — nur bewerten, nichts kopieren
+uv run python main.py ./urlaub ./auswahl --dry-run --verbose
+
+# Alles an: Fotos + Videos + Highlights, detaillierte Ausgabe
+uv run python main.py ./urlaub ./auswahl \
+  --top-percent 30 \
+  --top-percent-videos 50 \
+  --max-clips 3 \
+  --verbose
+```
+
+### GUI starten
+
+```bash
+uv run python gui.py
+```
+
+Das Fenster bietet alle Optionen als Eingabefelder, Schieberegler und Checkboxen. Einfach Eingabe-/Ausgabeordner auswählen, Einstellungen anpassen und "Start" klicken.
+
+### Überprüfen ob alles funktioniert
+
+```bash
+# Python-Dependencies prüfen
+uv run python -c "import cv2, PIL, open_clip, tqdm; print('Alle Dependencies OK')"
+
+# ffmpeg prüfen (nur für Video nötig)
+ffmpeg -version
+```
