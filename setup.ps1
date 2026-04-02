@@ -44,28 +44,24 @@ if (-not $git) {
                 & winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
                 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $env:Path
                 Write-Ok "Git installiert (ggf. Terminal neu starten fuer PATH-Update)"
-            }
-            catch {
+            } catch {
                 Write-Fail "Git-Installation fehlgeschlagen."
                 Write-Host "    Manuell installieren: https://git-scm.com/download/win"
                 Read-Host "    Enter druecken zum Beenden"
                 exit 1
             }
-        }
-        else {
+        } else {
             Write-Fail "Git wird benoetigt. Bitte manuell installieren: https://git-scm.com/download/win"
             Read-Host "    Enter druecken zum Beenden"
             exit 1
         }
-    }
-    else {
+    } else {
         Write-Fail "Git nicht gefunden und winget nicht verfuegbar."
         Write-Host "    Bitte Git manuell installieren: https://git-scm.com/download/win"
         Read-Host "    Enter druecken zum Beenden"
         exit 1
     }
-}
-else {
+} else {
     Write-Ok "Git gefunden"
 }
 
@@ -106,15 +102,13 @@ if (-not $uv) {
             throw "uv nach Installation nicht im PATH gefunden"
         }
         Write-Ok "uv installiert"
-    }
-    catch {
+    } catch {
         Write-Fail "uv konnte nicht installiert werden: $_"
         Write-Host "    Manuell installieren: https://docs.astral.sh/uv/getting-started/installation/"
         Read-Host "    Enter druecken zum Beenden"
         exit 1
     }
-}
-else {
+} else {
     Write-Ok "uv gefunden"
 }
 
@@ -123,8 +117,7 @@ Write-Step "Python-Dependencies installieren (kann beim ersten Mal etwas dauern)
 try {
     & uv sync
     Write-Ok "Dependencies installiert"
-}
-catch {
+} catch {
     Write-Fail "uv sync fehlgeschlagen: $_"
     Read-Host "    Enter druecken zum Beenden"
     exit 1
@@ -142,31 +135,22 @@ if (-not $ffmpeg) {
             try {
                 & winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements
                 Write-Ok "ffmpeg installiert (ggf. Terminal neu starten fuer PATH-Update)"
-            }
-            catch {
+            } catch {
                 Write-Warn "ffmpeg-Installation fehlgeschlagen. Manuell installieren: https://ffmpeg.org/download.html"
             }
-        }
-        else {
+        } else {
             Write-Warn "Uebersprungen — Video-Verarbeitung ist ohne ffmpeg nicht verfuegbar."
         }
-    }
-    else {
+    } else {
         Write-Warn "winget nicht verfuegbar. ffmpeg manuell installieren: https://ffmpeg.org/download.html"
     }
-}
-else {
+} else {
     Write-Ok "ffmpeg gefunden"
 }
 
 # --- start.bat erstellen ---
 Write-Step "start.bat erstellen..."
-$batContent = @"
-@echo off
-cd /d "%~dp0"
-uv run python gui.py
-pause
-"@
+$batContent = "@echo off`r`ncd /d `"%~dp0`"`r`nuv run python gui.py`r`npause"
 Set-Content -Path "start.bat" -Value $batContent -Encoding ASCII
 Write-Ok "start.bat erstellt — Doppelklick zum Starten der GUI"
 
