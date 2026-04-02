@@ -1,4 +1,4 @@
-# imgPick — Windows Setup Script
+﻿# imgPick -- Windows Setup Script
 # Am einfachsten: Doppelklick auf setup.bat
 # Alternativ: powershell -ExecutionPolicy Bypass -File setup.ps1
 
@@ -28,7 +28,7 @@ function Write-Fail($msg) {
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  imgPick — Setup fuer Windows" -ForegroundColor Cyan
+Write-Host "  imgPick -- Setup fuer Windows" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 # --- Git pruefen / installieren ---
@@ -93,7 +93,7 @@ Write-Ok "Python $major.$minor"
 Write-Step "uv (Paketmanager) pruefen..."
 $uv = Get-Command uv -ErrorAction SilentlyContinue
 if (-not $uv) {
-    Write-Warn "uv nicht gefunden — wird jetzt installiert..."
+    Write-Warn "uv nicht gefunden -- wird jetzt installiert..."
     try {
         Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" + $env:Path
@@ -127,7 +127,7 @@ try {
 Write-Step "ffmpeg pruefen (fuer Video-Verarbeitung)..."
 $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
 if (-not $ffmpeg) {
-    Write-Warn "ffmpeg nicht gefunden — wird fuer Video-Verarbeitung benoetigt."
+    Write-Warn "ffmpeg nicht gefunden -- wird fuer Video-Verarbeitung benoetigt."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
         $answer = Read-Host "    ffmpeg jetzt via winget installieren? (j/n)"
@@ -139,7 +139,7 @@ if (-not $ffmpeg) {
                 Write-Warn "ffmpeg-Installation fehlgeschlagen. Manuell installieren: https://ffmpeg.org/download.html"
             }
         } else {
-            Write-Warn "Uebersprungen — Video-Verarbeitung ist ohne ffmpeg nicht verfuegbar."
+            Write-Warn "Uebersprungen -- Video-Verarbeitung ist ohne ffmpeg nicht verfuegbar."
         }
     } else {
         Write-Warn "winget nicht verfuegbar. ffmpeg manuell installieren: https://ffmpeg.org/download.html"
@@ -152,7 +152,7 @@ if (-not $ffmpeg) {
 Write-Step "start.bat erstellen..."
 $batContent = "@echo off`r`ncd /d `"%~dp0`"`r`nuv run python gui.py`r`npause"
 Set-Content -Path "start.bat" -Value $batContent -Encoding ASCII
-Write-Ok "start.bat erstellt — Doppelklick zum Starten der GUI"
+Write-Ok "start.bat erstellt -- Doppelklick zum Starten der GUI"
 
 # --- Fertig ---
 Write-Host ""
@@ -160,8 +160,8 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "  Setup abgeschlossen!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  GUI starten:  Doppelklick auf start.bat" -ForegroundColor White
-Write-Host "  CLI starten:  uv run python main.py <input> <output>" -ForegroundColor White
+Write-Host '  GUI starten:  Doppelklick auf start.bat' -ForegroundColor White
+Write-Host '  CLI starten:  uv run python main.py <input> <output>' -ForegroundColor White
 Write-Host ""
 
 $startNow = Read-Host "GUI jetzt starten? (j/n)"
